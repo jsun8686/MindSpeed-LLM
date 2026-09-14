@@ -439,6 +439,64 @@ class ParallelArguments:
         },
     )
 
+    # --- Activation Offload (async activation offload via saved_tensors_hooks) ---
+    activation_offload: bool = field(
+        default=False,
+        metadata={"help": "Enable async activation offload for model blocks during training."},
+    )
+    activation_offload_backend: Literal["pinned", "memfabric"] = field(
+        default="memfabric",
+        metadata={
+            "help": "Backend used for activation offload: 'pinned' copies to per-tensor pinned host "
+            "buffers through NPU streams; 'memfabric' offloads to the remote DRAM memory pool "
+            "(MemFabric, DEVICE_RDMA)."
+        },
+    )
+    offload_pool_size_gb: int = field(
+        default=8,
+        metadata={"help": "Total remote DRAM pool bytes per rank when using the memfabric backend, in GB."},
+    )
+    offload_extend_block_gb: int = field(
+        default=1,
+        metadata={
+            "help": "Granularity of each extend_remote_mem request to the memfabric pool, in GB (2M aligned)."
+        },
+    )
+    offload_register_mode: Literal["per_tensor", "none"] = field(
+        default="per_tensor",
+        metadata={
+            "help": "Device memory registration mode for memfabric device-RDMA copies: 'per_tensor' registers "
+            "the tensor storage around each copy so the one-hop RDMA path is taken; 'none' skips "
+            "registration and relies on the internal bounce-buffer path (slower)."
+        },
+    )
+    mf_store_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "MemFabric config store url hosted on the FAR side, e.g. tcp://<far_ip>:<port>. "
+            "Required when activation_offload_backend is 'memfabric'."
+        },
+    )
+    mf_nic: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "RoCE nic url for DEVICE_RDMA transport (set_nic), e.g. tcp://<local_nic_ip>:<port>. "
+            "Required when activation_offload_backend is 'memfabric'."
+        },
+    )
+    mf_world_size: int = field(
+        default=64,
+        metadata={
+            "help": "MemFabric ralloc window capacity (max participating processes incl. FAR daemons). "
+            "Must be consistent across all FAR/NEAR processes."
+        },
+    )
+    mf_pool_id: int = field(default=0, metadata={"help": "MemFabric ralloc pool object id, in [0, 63]."})
+    mf_store_wait_timeout: int = field(
+        default=300,
+        metadata={"help": "Timeout in seconds for waiting the FAR-hosted config store and remote blocks."},
+    )
+
     def __post_init__(self):
         if self.fsdp_modules is None:
             raise ValueError(
@@ -448,6 +506,26 @@ class ParallelArguments:
             raise ValueError(
                 "Parameter 'fsdp_modules' cannot be an empty list! Please provide at least one module path (e.g. ['model.layers.{*}'])."
             )
+        if self.activation_offload:
+            if self.activation_offload_backend == "memfabric":
+                if not self.mf_store_url:
+                    raise ValueError(
+                        "--parallel.mf-store-url is required when activation offload uses the memfabric "
+                        "backend (the config store is hosted on the FAR side)."
+                    )
+                if not self.mf_nic:
+                    raise ValueError(
+                        "--parallel.mf-nic is required when activation offload uses the memfabric "
+                        "backend with DEVICE_RDMA transport."
+                    )
+            if self.offload_pool_size_gb <= 0:
+                raise ValueError("--parallel.offload-pool-size-gb must be positive.")
+            if self.offload_extend_block_gb <= 0 or self.offload_extend_block_gb > self.offload_pool_size_gb:
+                raise ValueError(
+                    "--parallel.offload-extend-block-gb must be in (0, offload_pool_size_gb]."
+                )
+            if not 0 <= self.mf_pool_id <= 63:
+                raise ValueError("--parallel.mf-pool-id must be in [0, 63].")
 
 
 @dataclass

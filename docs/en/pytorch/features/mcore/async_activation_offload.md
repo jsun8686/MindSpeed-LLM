@@ -42,3 +42,55 @@ with async_save_on_cpu(
 
 - Long-sequence scenarios: The computation cost of self-attention grows quadratically with sequence length. With this approach, you can offload the activation values from the forward pass of self-attention and skip recomputing self-attention during the recomputation stage. In typical scenarios, end-to-end performance improves by more than 20 percent.
 - FSDP2 scenarios: Under the FSDP2 distributed strategy, model parameters are partitioned and gathered. For shorter sequence lengths, computation time cannot mask communication time. You can use this approach to offload the activation values at the recomputation entry point. After saving memory, you can increase the micro-batch size or sequence length to raise the compute-to-communication ratio. In typical scenarios, end-to-end performance improves by more than 60 percent.
+
+## MemFabric Remote DRAM Pool Backend (FSDP2 / Qwen3-MoE)
+
+Besides the default pinned host-buffer backend, the FSDP2 backend (currently wired into
+Qwen3-MoE) supports offloading activations to a
+[MemFabric](https://gitcode.com/Ascend/memfabric_hybrid) cross-node DRAM memory pool over
+DEVICE_RDMA transport. This is useful when local host memory is insufficient or when you
+want to exploit the DRAM of remote memory nodes.
+
+### Deployment order (config store hosted on the FAR side, auto-rank mode)
+
+1. Start the FAR daemon on the first remote-memory node (it hosts the config store):
+   ```bash
+   python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+       --store-url tcp://<far_ip>:8572 --with-store \
+       --nic tcp://<far_ip>:10005 --world-size 16
+   ```
+2. Start the remaining FAR daemons on the other remote-memory nodes (they wait for the
+   store, then register themselves).
+3. Launch training (the NEAR side). Every training rank initializes ralloc with
+   `auto_ranking`, records the `torch_rank <-> ralloc_rank` mapping plus a
+   "acquired block -> contributor rank" table; training-framework rank ids are never used
+   to configure ralloc.
+
+### Training-side arguments (parallel group)
+
+| Argument | Description |
+|---|---|
+| `activation_offload` | Enable async activation offload |
+| `activation_offload_backend` | `memfabric` (default) or `pinned` |
+| `offload_pool_size_gb` | Total remote DRAM acquired per rank |
+| `offload_extend_block_gb` | Granularity of each `extend_remote_mem` request (2M aligned) |
+| `offload_register_mode` | `per_tensor` (default): register/unregister the NPU tensor memory around each copy to take the one-hop DEVICE_RDMA path; `none`: skip registration and fall back to the internal 128MB bounce path (slower) |
+| `mf_store_url` | FAR-hosted config store url (required) |
+| `mf_nic` | RoCE nic url required by DEVICE_RDMA (required) |
+| `mf_world_size` | ralloc window capacity; must match the FAR daemons |
+
+See `examples/fsdp2/qwen3_moe/tune_qwen3_30b_4k_fsdp2_A2_memfabric.sh/.yaml` for a
+complete example.
+
+### Implementation notes
+
+- DEVICE_RDMA `copy_data` is host-synchronous (the async flag is not supported), so
+  asynchrony is achieved by a background offload thread coordinated with NPU events: the
+  pack hook records a compute-stream event; the thread waits on it before issuing the
+  L2GH copy; device memory is released at the next block boundary. The backward unpack
+  performs a synchronous GH2L copy and prefetches the next block.
+- The training side manages a 4K-aligned fine-grained sub-allocator over the acquired
+  remote blocks (block requests are 2M aligned); slots are recycled with the tensor
+  lifecycle.
+- When the pool is exhausted, offload degrades gracefully (activations stay on device)
+  and training continues.

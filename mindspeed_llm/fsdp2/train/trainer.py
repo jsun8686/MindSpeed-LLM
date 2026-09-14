@@ -136,6 +136,30 @@ class Trainer:
         train_dataloader = self.train_dataloader
         ps = ParallelState()
 
+        # MemFabric activation-offload pool lifecycle (NEAR role, remote DRAM blocks)
+        use_mf_offload = (
+            getattr(self.parallel_args, "activation_offload", False)
+            and getattr(self.parallel_args, "activation_offload_backend", "pinned") == "memfabric"
+        )
+        if use_mf_offload:
+            from mindspeed_llm.fsdp2.features.async_offload import MemFabricPool
+
+            device_id = int(os.environ.get("LOCAL_RANK", 0))
+            MemFabricPool().initialize(self.parallel_args, torch_rank=dist.get_rank(), device_id=device_id)
+
+        try:
+            self._train_loop(resume_from_checkpoint)
+        finally:
+            if use_mf_offload:
+                from mindspeed_llm.fsdp2.features.async_offload import MemFabricPool
+
+                MemFabricPool().destroy()
+
+    def _train_loop(self, resume_from_checkpoint: Optional[str] = None):
+        args = self.args
+        train_dataloader = self.train_dataloader
+        ps = ParallelState()
+
         # Determine the reduction group
         if ps.is_fsdp_enable():
             reduce_group = ps.get_fsdp_group()

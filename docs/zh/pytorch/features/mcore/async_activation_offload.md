@@ -42,3 +42,45 @@ with async_save_on_cpu(
 
 - 长序列场景：self-attention的计算量随序列长度呈平方关系增长，使用该方案卸载self-attention前向计算的激活值，并在重计算时跳过self-attention的重计算。典型场景下端到端性能收益20%以上。
 - FSDP2场景：FSDP2分布式策略下，对模型参数进行切分和聚合，较短序列长度下，计算耗时无法掩盖通信耗时。可以使用该方案，将重计算入口的激活值卸载，节省出显存后增大micro-batch size或序列长度提高计算比例。典型场景下端到端性能收益60%以上。
+
+## MemFabric 远端 DRAM 内存池后端（FSDP2 / Qwen3-MoE）
+
+除默认的 pinned host buffer 后端外，FSDP2 后端（当前接入 Qwen3-MoE）支持将激活值卸载到
+[MemFabric](https://gitcode.com/Ascend/memfabric_hybrid) 跨机 DRAM 内存池，走 DEVICE_RDMA
+传输，适用于本机 Host 内存不足或希望利用远端内存节点 DRAM 的场景。
+
+### 部署时序（config store 托管在 FAR 侧，auto_rank 模式）
+
+1. 在第一个远端内存节点启动 FAR 守护进程（托管 config store）：
+   ```bash
+   python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+       --store-url tcp://<far_ip>:8572 --with-store \
+       --nic tcp://<far_ip>:10005 --world-size 16
+   ```
+2. 在其余远端内存节点启动其他 FAR 守护进程（等待 store 后自动注册）。
+3. 启动训练（NEAR 侧）。各训练 rank 以 `auto_ranking` 模式初始化 ralloc，记录
+   `torch_rank <-> ralloc_rank` 映射与"已申请块 → 贡献者 rank"映射表；训练框架自身的
+   rankId 不用于配置 ralloc。
+
+### 训练侧参数（parallel 组）
+
+| 参数 | 说明 |
+|---|---|
+| `activation_offload` | 开启激活值异步卸载 |
+| `activation_offload_backend` | `memfabric`（默认）或 `pinned` |
+| `offload_pool_size_gb` | 每 rank 向池申请的远端 DRAM 总量 |
+| `offload_extend_block_gb` | 每次 `extend_remote_mem` 的申请粒度（2M 对齐） |
+| `offload_register_mode` | `per_tensor`（默认）：拷贝前后注册/注销 NPU 张量内存，走一跳 DEVICE_RDMA 直写；`none`：不注册，走内部 128MB bounce 路径（较慢） |
+| `mf_store_url` | FAR 侧托管的 config store 地址（必填） |
+| `mf_nic` | DEVICE_RDMA 所需的 RoCE NIC 地址（必填） |
+| `mf_world_size` | ralloc 窗口容量，需与 FAR 守护进程一致 |
+
+完整示例参见 `examples/fsdp2/qwen3_moe/tune_qwen3_30b_4k_fsdp2_A2_memfabric.sh/.yaml`。
+
+### 实现要点
+
+- DEVICE_RDMA 的 `copy_data` 为 host 同步调用（不支持 async flag），异步性由后台卸载线程
+  + NPU event 协调实现：pack 时记录计算流 event，线程内等 event 后发起 L2GH 拷贝，下个
+  block 边界释放显存；反向 unpack 同步 GH2L 拷回并预取下一 block。
+- 训练侧对远端池块做 4K 对齐细粒度子分配（块申请 2M 对齐），slot 随张量生命周期回收复用。
+- 池耗尽时自动退化为"不卸载"，训练不中断。

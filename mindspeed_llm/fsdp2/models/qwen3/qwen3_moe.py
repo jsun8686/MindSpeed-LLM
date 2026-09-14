@@ -304,6 +304,7 @@ def qwen3_moe_model_forward(
     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
     offload_stream = torch.npu.Stream()
+    offload_backend = getattr(get_args(), "activation_offload_backend", "pinned")
 
     for layer_id, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
         if self.training:
@@ -313,6 +314,7 @@ def qwen3_moe_model_forward(
                 block_idx=int(layer_id),
                 depth=len(self.layers),
                 custom_check_fn=lambda x: x.data_ptr() == hidden_states.data_ptr(),  # pylint: disable=W0640
+                backend=offload_backend,
             ):
                 hidden_states = decoder_layer(
                     hidden_states,
