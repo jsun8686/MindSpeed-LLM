@@ -55,7 +55,7 @@ want to exploit the DRAM of remote memory nodes.
 
 1. Start the FAR daemon on the first remote-memory node (it hosts the config store):
    ```bash
-   python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+   python examples/memfabric/memfabric_far_daemon.py \
        --store-url tcp://<far_ip>:8572 --with-store \
        --nic tcp://<far_ip>:10005 --world-size 16
    ```
@@ -94,3 +94,29 @@ complete example.
   lifecycle.
 - When the pool is exhausted, offload degrades gracefully (activations stay on device)
   and training continues.
+
+## Megatron backend (mcore) generic integration
+
+The mcore path mounts the saved_tensors_hooks at the shared `TransformerBlock.forward`
+choke point, so **every GPT-style mcore model (qwen/qwen2/qwen3/deepseek/glm/llama ...)
+works without per-model wiring**. The mechanism layer is fully shared with the fsdp2
+path (`mindspeed_llm/core/memory/async_offload.py`, memfabric/pinned backends).
+
+### Arguments (flat names, same semantics as the fsdp2 side)
+
+`--activation-offload`, `--activation-offload-backend {pinned,memfabric}`,
+`--offload-pool-size-gb`, `--offload-extend-block-gb`, `--offload-register-mode`,
+`--mf-store-url`, `--mf-nic`, `--mf-world-size`, `--mf-pool-id`,
+`--mf-store-wait-timeout`
+
+### v1 supported scope (rejected at startup beyond it)
+
+- Supported: TP / DP / EP; recompute off or selective
+- Unsupported: `--pipeline-model-parallel-size > 1`, VPP, `--context-parallel-size > 1`,
+  `--share-kvstates`, `--n-hash-layers >= 1`, `--recompute-granularity full`
+  (hook nesting with mcore checkpointing pending on-device verification)
+
+### Example
+
+`examples/mcore/qwen3_moe/tune_qwen3_30b_a3b_4K_memfabric_ptd.sh` (TP=8/PP=1/EP=8;
+the FAR daemon `examples/memfabric/memfabric_far_daemon.py` still starts before training).

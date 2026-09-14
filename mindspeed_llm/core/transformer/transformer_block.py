@@ -37,6 +37,34 @@ from mindspeed.core.pipeline_parallel.noop_layers.adaptor import NoopTransformer
 from mindspeed.core.transformer.transformer_block import _get_layer_offset
 from mindspeed.core.transformer.transformer import norm_recompute_forward
 from mindspeed.model.transformer import should_recompute_norm
+from mindspeed_llm.core.memory.async_offload import async_save_on_cpu
+
+
+def _activation_offload_context(block, layer_idx, layer_input):
+    """Saved-tensors-hooks context offloading this layer's input activation.
+
+    Generic choke point: every GPT-style mcore model runs its decoder layers
+    through transformer_block_forward, so installing the hooks here covers all
+    of them without per-model wiring. MemFabric/pinned backends are shared with
+    the fsdp2 path (mindspeed_llm/core/memory/async_offload.py).
+    """
+    args = get_args()
+    if not getattr(args, "activation_offload", False) or not block.training:
+        return nullcontext()
+    backend = getattr(args, "activation_offload_backend", "pinned")
+    stream = None
+    if backend == "pinned":
+        if not hasattr(block, "_activation_offload_stream"):
+            block._activation_offload_stream = torch.npu.Stream()
+        stream = block._activation_offload_stream
+    return async_save_on_cpu(
+        h2d_stream=stream,
+        d2h_stream=stream,
+        block_idx=layer_idx,
+        depth=len(block.layers),
+        custom_check_fn=lambda x: x.data_ptr() == layer_input.data_ptr(),
+        backend=backend,
+    )
 
 
 def get_num_layers_to_build(config: TransformerConfig) -> int:
@@ -306,6 +334,11 @@ def transformer_block_forward(
     with rng_context, outer_fp8_context:
         # Forward pass.
         if self.config.recompute_granularity == 'full' and self.training:
+            if getattr(args, "activation_offload", False):
+                raise RuntimeError(
+                    "--activation-offload with recompute-granularity=full is not verified yet "
+                    "(saved_tensors_hooks nesting with mcore checkpointing); use selective/none."
+                )
             # te 版本 131 引入fix inner 采用fp8
             kwargs = {}
             if 'use_inner_fp8_context' in self._checkpointed_forward.__code__.co_varnames:
@@ -360,11 +393,12 @@ def transformer_block_forward(
                         **kwargs,
                     )
         else:
-            for _, layer in enumerate(self.layers):
+            for layer_idx, layer in enumerate(self.layers):
                 inner_fp8_context = (
                     get_fp8_context(self.config, layer.layer_number - 1) if use_inner_fp8_context else nullcontext()
                 )
-                with self.offload_context, inner_fp8_context:
+                activation_offload_context = _activation_offload_context(self, layer_idx, hidden_states)
+                with self.offload_context, inner_fp8_context, activation_offload_context:
                     if global_args.share_kvstates:
                         if args.n_hash_layers >= 1:
                             hidden_states, context, key_value_states = layer(

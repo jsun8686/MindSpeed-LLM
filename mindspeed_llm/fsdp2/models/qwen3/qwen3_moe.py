@@ -29,7 +29,7 @@ try:
 except ImportError:
     pass
 
-from mindspeed_llm.fsdp2.features.async_offload import async_save_on_cpu
+from mindspeed_llm.core.memory.async_offload import async_save_on_cpu
 from mindspeed_llm.fsdp2.models.common.fusions import fused_rmsnorm_forward, apply_rotary_pos_emb
 from mindspeed_llm.fsdp2.models.common.modules import LMHead
 from mindspeed_llm.fsdp2.utils.global_vars import get_args

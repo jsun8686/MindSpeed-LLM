@@ -4,11 +4,11 @@
 #
 # Prerequisites (startup order matters, the config store lives on the FAR side):
 #   1. On the FIRST remote-memory node, start the FAR daemon hosting the store:
-#        python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+#        python examples/memfabric/memfabric_far_daemon.py \
 #            --store-url tcp://10.0.0.1:8572 --with-store \
 #            --nic tcp://10.0.0.1:10005 --world-size 16
 #   2. On every OTHER remote-memory node, start the remaining FAR daemons:
-#        python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+#        python examples/memfabric/memfabric_far_daemon.py \
 #            --store-url tcp://10.0.0.1:8572 \
 #            --nic tcp://10.0.1.1:10005 --world-size 16
 #   3. Then launch this training script (NEAR side, waits for the store itself).

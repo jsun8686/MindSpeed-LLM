@@ -31,7 +31,7 @@ def _install_fake_torch_npu():
 
 _install_fake_torch_npu()
 
-from mindspeed_llm.fsdp2.features.async_offload import (  # pylint: disable=wrong-import-position
+from mindspeed_llm.core.memory.async_offload import (  # pylint: disable=wrong-import-position
     MF_SLOT_ALIGN,
     MemFabricPool,
     MFSwapTensor,
@@ -205,7 +205,7 @@ class TestMemFabricPool(unittest.TestCase):
     def test_initialize_near_role_auto_rank_and_block_table(self):
         _, fake_ralloc = _install_fake_memfabric(self.handle)
         pool = MemFabricPool()
-        with mock.patch("mindspeed_llm.fsdp2.features.async_offload.mf_wait_for_store"):
+        with mock.patch("mindspeed_llm.core.memory.async_offload.mf_wait_for_store"):
             pool.initialize(_make_pool_args(), torch_rank=5, device_id=3)
 
         self.assertTrue(pool.inited)
@@ -229,7 +229,7 @@ class TestMemFabricPool(unittest.TestCase):
     def test_register_refcount(self):
         _install_fake_memfabric(self.handle)
         pool = MemFabricPool()
-        with mock.patch("mindspeed_llm.fsdp2.features.async_offload.mf_wait_for_store"):
+        with mock.patch("mindspeed_llm.core.memory.async_offload.mf_wait_for_store"):
             pool.initialize(_make_pool_args())
 
         pool.register_dev(0x2000, 4096)
@@ -249,7 +249,7 @@ class TestMemFabricPool(unittest.TestCase):
     def test_copy_and_slot_lifecycle(self):
         _install_fake_memfabric(self.handle)
         pool = MemFabricPool()
-        with mock.patch("mindspeed_llm.fsdp2.features.async_offload.mf_wait_for_store"):
+        with mock.patch("mindspeed_llm.core.memory.async_offload.mf_wait_for_store"):
             pool.initialize(_make_pool_args())
 
         gva = pool.alloc_slot(1000)
@@ -265,7 +265,7 @@ class TestMemFabricPool(unittest.TestCase):
     def test_destroy(self):
         _install_fake_memfabric(self.handle)
         pool = MemFabricPool()
-        with mock.patch("mindspeed_llm.fsdp2.features.async_offload.mf_wait_for_store"):
+        with mock.patch("mindspeed_llm.core.memory.async_offload.mf_wait_for_store"):
             pool.initialize(_make_pool_args())
         pool.destroy()
         self.assertFalse(pool.inited)
@@ -281,7 +281,7 @@ class TestMFSwapTensor(unittest.TestCase):
         self.handle = _FakeRallocHandle(1 << 30)
         _install_fake_memfabric(self.handle)
         self.pool = MemFabricPool()
-        with mock.patch("mindspeed_llm.fsdp2.features.async_offload.mf_wait_for_store"):
+        with mock.patch("mindspeed_llm.core.memory.async_offload.mf_wait_for_store"):
             self.pool.initialize(_make_pool_args())
         # drive copies synchronously for determinism
         self.pool.worker.stop()

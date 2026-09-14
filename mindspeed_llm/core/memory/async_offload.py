@@ -1,3 +1,5 @@
+import logging
+import os
 import queue
 import socket
 import threading
@@ -10,9 +12,13 @@ except ImportError:
     pass
 from torch.autograd.graph import saved_tensors_hooks
 
-from mindspeed_llm.fsdp2.utils.logging import get_logger
+logger = logging.getLogger(__name__)
 
-logger = get_logger(__name__)
+
+def _log_rank0(msg):
+    """Log only on the local-rank-0 process; safe under both fsdp2 and mcore logging setups."""
+    if int(os.getenv("LOCAL_RANK", "0")) == 0:
+        logger.info(msg)
 
 # Slot alignment inside acquired pool blocks (device RDMA / MR registration granularity).
 MF_SLOT_ALIGN = 4096
@@ -465,7 +471,7 @@ class MemFabricPool(metaclass=SingletonMeta):
             ) from exc
 
         store_url = args.mf_store_url
-        logger.info_rank0(f"[MemFabricPool] waiting for FAR-hosted config store: {store_url}")
+        _log_rank0(f"[MemFabricPool] waiting for FAR-hosted config store: {store_url}")
         mf_wait_for_store(store_url, timeout_sec=args.mf_store_wait_timeout)
 
         if mf.initialize() != 0:
@@ -540,7 +546,7 @@ class MemFabricPool(metaclass=SingletonMeta):
                 mapping = [None] * dist.get_world_size()
                 dist.all_gather_object(mapping, (torch_rank, self.ralloc_rank))
                 if dist.get_rank() == 0:
-                    logger.info_rank0(f"[MemFabricPool] torch_rank <-> ralloc_rank mapping: {mapping}")
+                    _log_rank0(f"[MemFabricPool] torch_rank <-> ralloc_rank mapping: {mapping}")
         except Exception:  # pylint: disable=broad-except
             pass
 

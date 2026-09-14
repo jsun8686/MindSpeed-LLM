@@ -592,6 +592,18 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers = get_timers()
     one_logger = get_one_logger()
 
+    # MemFabric activation-offload pool lifecycle (NEAR role, remote DRAM blocks)
+    use_mf_offload = (
+        getattr(args, "activation_offload", False)
+        and getattr(args, "activation_offload_backend", "pinned") == "memfabric"
+    )
+    if use_mf_offload:
+        from mindspeed_llm.core.memory.async_offload import MemFabricPool
+
+        MemFabricPool().initialize(
+            args, torch_rank=torch.distributed.get_rank(), device_id=int(os.getenv("LOCAL_RANK", 0))
+        )
+
     # Write args to tensorboard
     write_args_to_tensorboard()
 
@@ -908,6 +920,12 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
+
+    # Tear down the MemFabric activation-offload pool (covers the sys.exit path below too).
+    if use_mf_offload:
+        from mindspeed_llm.core.memory.async_offload import MemFabricPool
+
+        MemFabricPool().destroy()
 
     # If any exit conditions (signal handler, duration, iterations) have been reached, exit.
     if exit:

@@ -142,7 +142,7 @@ class Trainer:
             and getattr(self.parallel_args, "activation_offload_backend", "pinned") == "memfabric"
         )
         if use_mf_offload:
-            from mindspeed_llm.fsdp2.features.async_offload import MemFabricPool
+            from mindspeed_llm.core.memory.async_offload import MemFabricPool
 
             device_id = int(os.environ.get("LOCAL_RANK", 0))
             MemFabricPool().initialize(self.parallel_args, torch_rank=dist.get_rank(), device_id=device_id)
@@ -151,7 +151,7 @@ class Trainer:
             self._train_loop(resume_from_checkpoint)
         finally:
             if use_mf_offload:
-                from mindspeed_llm.fsdp2.features.async_offload import MemFabricPool
+                from mindspeed_llm.core.memory.async_offload import MemFabricPool
 
                 MemFabricPool().destroy()
 

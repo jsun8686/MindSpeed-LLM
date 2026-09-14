@@ -53,7 +53,7 @@ with async_save_on_cpu(
 
 1. 在第一个远端内存节点启动 FAR 守护进程（托管 config store）：
    ```bash
-   python examples/fsdp2/qwen3_moe/memfabric_far_daemon.py \
+   python examples/memfabric/memfabric_far_daemon.py \
        --store-url tcp://<far_ip>:8572 --with-store \
        --nic tcp://<far_ip>:10005 --world-size 16
    ```
@@ -84,3 +84,28 @@ with async_save_on_cpu(
   block 边界释放显存；反向 unpack 同步 GH2L 拷回并预取下一 block。
 - 训练侧对远端池块做 4K 对齐细粒度子分配（块申请 2M 对齐），slot 随张量生命周期回收复用。
 - 池耗尽时自动退化为"不卸载"，训练不中断。
+
+## Megatron 后端（mcore）通用接入
+
+Megatron 路径已在 `TransformerBlock.forward` 公共咽喉点统一挂载 saved_tensors_hooks，
+**所有 GPT 系 mcore 模型（qwen/qwen2/qwen3/deepseek/glm/llama 等）无需逐模型适配即可使用**。
+机制层与 FSDP2 路径完全共享（`mindspeed_llm/core/memory/async_offload.py`，memfabric/pinned
+双后端）。
+
+### 参数（平铺命名，与 FSDP2 侧同义）
+
+`--activation-offload`、`--activation-offload-backend {pinned,memfabric}`、
+`--offload-pool-size-gb`、`--offload-extend-block-gb`、`--offload-register-mode`、
+`--mf-store-url`、`--mf-nic`、`--mf-world-size`、`--mf-pool-id`、`--mf-store-wait-timeout`
+
+### v1 支持范围（超出即启动报错）
+
+- 支持：TP / DP / EP；recompute 关闭或 selective
+- 不支持：`--pipeline-model-parallel-size > 1`、VPP、`--context-parallel-size > 1`、
+  `--share-kvstates`、`--n-hash-layers >= 1`、`--recompute-granularity full`
+  （与 mcore checkpointing 的 hook 嵌套语义待真机验证后放开）
+
+### 示例
+
+`examples/mcore/qwen3_moe/tune_qwen3_30b_a3b_4K_memfabric_ptd.sh`（TP=8/PP=1/EP=8，
+FAR 守护进程仍使用 `examples/memfabric/memfabric_far_daemon.py`，先于训练启动）

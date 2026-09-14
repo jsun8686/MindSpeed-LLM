@@ -93,6 +93,7 @@ from mindspeed_llm.features_manager.tensor_parallel.tp_2d import TP2dFeature
 from mindspeed_llm.features_manager.arguments.deprecated_args import DeprecatedArgsFeature
 from mindspeed_llm.features_manager.convert_checkpoint.convert_checkpoint import CheckpointFeature
 from mindspeed_llm.features_manager.memory.chunk_loss import ChunkLossFeature
+from mindspeed_llm.features_manager.memory.activation_offload_feature import ActivationOffloadFeature
 from mindspeed_llm.features_manager.layerwise_disaggregated_training.u_shaped_split_feature import UShapedSplitFeature
 from mindspeed_llm.features_manager.layerwise_disaggregated_training.vtp_feature import VTPFeature
 from mindspeed_llm.features_manager.qat.qat_quant_engine import QATQuantEngineFeature
@@ -129,6 +130,7 @@ def add_megatron_basic_features(features_list: List[MindSpeedFeature]):
             TransformerEngineBasicFeature(),
             Qwen3NextFeature(),
             ChunkLossFeature(),
+            ActivationOffloadFeature(),
             MuonOptimizerFeature(),
         ]
     )
